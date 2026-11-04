@@ -1,0 +1,38 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('sites', function (Blueprint $table) {
+            $table->id();
+            $table->string('handle')->unique();
+            $table->string('name');
+            /* Null matches any host, which is what a single site wants: local,
+               staging and production reach the same row. */
+            $table->string('hostname')->nullable()->unique();
+            /* The entry served at `/`, chosen as WordPress chooses a static
+               front page: its type's handle and its id, or none. */
+            $table->string('front_type')->nullable();
+            $table->unsignedBigInteger('front_id')->nullable();
+        });
+
+        /* Seeded here rather than by a seeder, because every content table
+           references a site and an installation with none cannot hold content. */
+        DB::table('sites')->insert([
+            'handle' => 'default',
+            'name' => config('app.name'),
+            'hostname' => null,
+        ]);
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('sites');
+    }
+};

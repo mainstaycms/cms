@@ -1,0 +1,173 @@
+<?php
+
+namespace Mainstay\Auth;
+
+use Doctrine\Inflector\InflectorFactory;
+use Doctrine\Inflector\Language;
+use Illuminate\Auth\Access\Response;
+use Mainstay\Content\GlobalSet;
+use Mainstay\Content\Taxonomy;
+use Mainstay\Mainstay;
+use Mainstay\Plugin;
+
+/*
+ | What a user may be allowed to do, WordPress's way: strings, never stored,
+ | computed from the registered types. Each type has a set of its own, named
+ | from its handle, and each capability has a form that covers every type of
+ | its shape, those deployed later included -- so a role names a few types or
+ | all of them.
+ */
+final class Capabilities
+{
+    public const ENTRY = ['edit', 'edit_published', 'edit_others', 'publish', 'delete', 'delete_others'];
+
+    public const GLOBAL = ['edit', 'publish'];
+
+    public const TERM = ['manage'];
+
+    /* The library is one, so its capabilities have no per-type form. */
+    public const MEDIA = ['upload_media', 'edit_others_media'];
+
+    public const USERS = 'manage_users';
+
+    public const CONNECTORS = 'manage_connectors';
+
+    /*
+     | A verb's two names for a type: its own and every type's.
+     |
+     | @return array{0: string, 1: string}
+     */
+    public static function names(string $type, string $verb): array
+    {
+        [$own, $every] = self::nouns($type);
+
+        return ["{$verb}_{$own}", "{$verb}_{$every}"];
+    }
+
+    /** @return list<string> every name a type's own set holds */
+    public static function of(string $type): array
+    {
+        return array_map(fn (string $verb) => self::names($type, $verb)[0], self::verbs($type));
+    }
+
+    /** @return list<string> every name no type owns: the all-types forms, the library's, the accounts' and the AI connectors' */
+    public static function shared(): array
+    {
+        return [
+            ...array_map(fn (string $verb) => "{$verb}_entries", self::ENTRY),
+            ...array_map(fn (string $verb) => "{$verb}_globals", self::GLOBAL),
+            ...array_map(fn (string $verb) => "{$verb}_terms", self::TERM),
+            ...self::MEDIA,
+            self::USERS,
+            self::CONNECTORS,
+        ];
+    }
+
+    /*
+     | Each plugin with admin screens and the capability they answer to,
+     | `use_<handle>`: the one list its routes, the sidebar, the roles grid and
+     | the names a role may hold all read, so none of them can disagree. A
+     | plugin without screens has nothing for one to open. No type's name
+     | starts `use_`, so none collides.
+     |
+     | @return array<class-string<Plugin>, string>
+     */
+    public static function plugins(): array
+    {
+        $names = [];
+
+        foreach (app(Mainstay::class)->plugins() as $handle => $plugin) {
+            if ($plugin->routes() !== null) {
+                $names[$plugin::class] = "use_{$handle}";
+            }
+        }
+
+        return $names;
+    }
+
+    /*
+     | A policy's answer: allowed where the user holds one name of every list
+     | given, refused naming the first they lack -- or `$nobody` where there
+     | is no user, which names the override.
+     */
+    public static function check(?User $user, string $nobody, array ...$needs): Response
+    {
+        if ($user === null) {
+            return Response::deny($nobody);
+        }
+
+        foreach ($needs as $names) {
+            if (! $user->holds(...$names)) {
+                return Response::deny("This needs {$names[0]}.");
+            }
+        }
+
+        return Response::allow();
+    }
+
+    /*
+     | The first of these names a user could not hand out, or null: one whose
+     | every check would not pass for them. A type's own name passes through
+     | either form, as the policies ask it; an all-types name only where no
+     | type's own form of it is denied, since a role holding `edit_entries`
+     | edits every type; `*` only through a role of `*` with no denials, `*`
+     | being a role's and never a grant's; a plugin's only where it is held. A
+     | name no type or plugin derives any longer gives nothing, so it is not
+     | counted.
+     */
+    public static function uncovered(User $user, array $names): ?string
+    {
+        $alone = [...self::shared(), ...array_values(self::plugins())];
+        /** @var array<string, list<list<string>>> $needs */
+        $needs = array_map(fn (string $name) => [[$name]], array_combine($alone, $alone));
+
+        foreach (app(Mainstay::class)->registered() as $type) {
+            foreach (self::verbs($type) as $verb) {
+                [$own, $every] = self::names($type, $verb);
+                $needs[$own] = [[$own, $every]];
+                $needs[$every][] = [$own, $every];
+            }
+        }
+
+        foreach ($names as $name) {
+            $passes = $name === '*'
+                ? in_array('*', $user->role->capabilities, true) && $user->denials === []
+                : collect($needs[$name] ?? [])->every(fn (array $any) => $user->holds(...$any));
+
+            if (! $passes) {
+                return $name;
+            }
+        }
+
+        return null;
+    }
+
+    /** @return list<string> */
+    private static function verbs(string $type): array
+    {
+        return match (true) {
+            is_subclass_of($type, GlobalSet::class) => self::GLOBAL,
+            is_subclass_of($type, Taxonomy::class) => self::TERM,
+            default => self::ENTRY,
+        };
+    }
+
+    /*
+     | A global is one per site, so its own noun is its handle. The plural is
+     | English whatever language the host gives Laravel's Pluralizer, which
+     | would otherwise rename every capability a role holds.
+     |
+     | @return array{0: string, 1: string}
+     */
+    private static function nouns(string $type): array
+    {
+        static $english;
+        $english ??= InflectorFactory::createForLanguage(Language::ENGLISH)->build();
+
+        return match (true) {
+            is_subclass_of($type, GlobalSet::class) => [$type::handle(), 'globals'],
+            is_subclass_of($type, Taxonomy::class) => [$english->pluralize($type::handle()), 'terms'],
+            default => [$english->pluralize($type::handle()), 'entries'],
+        };
+    }
+}

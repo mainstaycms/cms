@@ -1,0 +1,22 @@
+{
+  "name": "@mainstay/admin",
+  "version": "0.1.0",
+  "description": "The Mainstay admin panel. Built into packages/cms/dist and served by the Laravel package; never published.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mainstay/editor": "workspace:*",
+    "@mainstay/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  }
+}
